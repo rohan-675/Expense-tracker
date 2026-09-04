@@ -1,23 +1,46 @@
 import User from "../models/User.js";
 import generateToken from "../utils/generateToken.js";
 import { isAllowedCurrency } from "../utils/currencies.js";
+import { isValidEmailFormat } from "../utils/validateEmail.js";
 import { OAuth2Client } from "google-auth-library";
 import { clearAuthCookie, setAuthCookie } from "../utils/authCookie.js";
+import { generateVerificationToken, hashToken } from "../utils/verificationToken.js";
+import { sendVerificationEmail } from "../services/emailService.js";
 
-// The token itself now lives only in the httpOnly cookie, never in the
-// JSON body, so client-side JS (and therefore XSS) can't read it out of
+// The token itself lives only in the httpOnly cookie, never in the JSON
+// body, so client-side JS (and therefore XSS) can't read it out of
 // localStorage. The frontend only ever sees this plain user profile.
 const userResponse = (user) => ({
   id: user._id,
   name: user.name,
   email: user.email,
-  currency: user.currency || "USD"
+  currency: user.currency || "USD",
+  emailVerified: user.emailVerified
 });
 
 const respondWithSession = (res, user, status = 200) => {
   const token = generateToken(user._id);
   setAuthCookie(res, token);
   res.status(status).json(userResponse(user));
+};
+
+const issueVerificationEmail = async (user) => {
+  const { rawToken, tokenHash, expiresAt } = generateVerificationToken();
+  user.verificationTokenHash = tokenHash;
+  user.verificationTokenExpiry = expiresAt;
+  await user.save();
+
+  try {
+    await sendVerificationEmail({ to: user.email, name: user.name, rawToken });
+  } catch (emailError) {
+    // Registration/account state should still succeed even if the email
+    // provider is temporarily down — the user can use "resend verification
+    // email" once it's back. Log the real cause server-side only.
+    console.error("Failed to send verification email:", emailError);
+    throw Object.assign(new Error("Account created, but the verification email failed to send. Please use \"resend verification email\" shortly."), {
+      statusCode: 502
+    });
+  }
 };
 
 export const registerUser = async (req, res, next) => {
@@ -29,20 +52,46 @@ export const registerUser = async (req, res, next) => {
       throw new Error("Name, email, and password are required");
     }
 
+    if (!isValidEmailFormat(email)) {
+      res.status(400);
+      throw new Error("Enter a valid email address");
+    }
+
     const normalizedCurrency = String(currency).toUpperCase();
     if (!isAllowedCurrency(normalizedCurrency)) {
       res.status(400);
       throw new Error("Selected currency is not supported");
     }
 
-    const userExists = await User.findOne({ email });
+    const userExists = await User.findOne({ email: email.toLowerCase().trim() });
     if (userExists) {
       res.status(409);
       throw new Error("An account with this email already exists");
     }
 
-    const user = await User.create({ name, email, password, currency: normalizedCurrency });
-    respondWithSession(res, user, 201);
+    const user = await User.create({
+      name,
+      email,
+      password,
+      currency: normalizedCurrency,
+      emailVerified: false
+    });
+
+    try {
+      await issueVerificationEmail(user);
+    } catch (emailError) {
+      // Account was created; only the email step failed. Report that
+      // distinct, less-severe outcome rather than a generic 500.
+      res.status(emailError.statusCode || 502);
+      throw emailError;
+    }
+
+    // Deliberately does NOT log the user in (no cookie set) — an unverified
+    // account must not be usable yet, per the verification requirement.
+    res.status(201).json({
+      message: "Account created. Please check your email to verify your account before logging in.",
+      email: user.email
+    });
   } catch (error) {
     next(error);
   }
@@ -57,13 +106,88 @@ export const loginUser = async (req, res, next) => {
       throw new Error("Email and password are required");
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user || !(await user.matchPassword(password))) {
       res.status(401);
       throw new Error("Invalid email or password");
     }
 
+    if (!user.emailVerified) {
+      res.status(403);
+      throw new Error("Please verify your email before logging in.");
+    }
+
     respondWithSession(res, user);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const verifyEmail = async (req, res, next) => {
+  try {
+    const rawToken = req.body?.token || req.query?.token;
+
+    if (!rawToken || typeof rawToken !== "string") {
+      res.status(400);
+      throw new Error("Verification token is required");
+    }
+
+    const user = await User.findOne({
+      verificationTokenHash: hashToken(rawToken),
+      verificationTokenExpiry: { $gt: new Date() }
+    }).select("+verificationTokenHash +verificationTokenExpiry");
+
+    if (!user) {
+      res.status(400);
+      throw new Error("This verification link is invalid or has expired. Please request a new one.");
+    }
+
+    if (user.emailVerified) {
+      // Shouldn't normally happen since the token is cleared on success,
+      // but handle it cleanly rather than erroring if it's ever replayed.
+      res.status(200);
+      res.json({ message: "This account is already verified. You can log in." });
+      return;
+    }
+
+    user.emailVerified = true;
+    user.verificationTokenHash = undefined;
+    user.verificationTokenExpiry = undefined;
+    await user.save();
+
+    // Log the user straight in after verifying — they've just proven email
+    // ownership, so there's no reason to make them log in a second time.
+    respondWithSession(res, user);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const resendVerificationEmail = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email || !isValidEmailFormat(email)) {
+      res.status(400);
+      throw new Error("Enter a valid email address");
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    // Always respond the same way regardless of whether the account exists
+    // or is already verified — telling the caller which case it was would
+    // let this endpoint be used to check which emails are registered.
+    const genericResponse = {
+      message: "If an account with that email exists and isn't verified yet, a new verification email has been sent."
+    };
+
+    if (!user || user.emailVerified || user.authProvider !== "local") {
+      res.json(genericResponse);
+      return;
+    }
+
+    await issueVerificationEmail(user);
+    res.json(genericResponse);
   } catch (error) {
     next(error);
   }
@@ -84,15 +208,34 @@ export const googleLogin = async (req, res, next) => {
     }
 
     const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-    const ticket = await client.verifyIdToken({
-      idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID
-    });
-    const payload = ticket.getPayload();
+    let payload;
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken: credential,
+        audience: process.env.GOOGLE_CLIENT_ID
+      });
+      payload = ticket.getPayload();
+    } catch (verifyError) {
+      // google-auth-library gives a specific, useful reason here (expired
+      // token, audience/client-ID mismatch, wrong issuer, malformed JWT,
+      // clock skew, etc). Logging it is what actually lets a "works on
+      // some devices" report get root-caused next time it happens, instead
+      // of only ever seeing a generic "Unable to verify Google account".
+      console.error("Google ID token verification failed:", verifyError.message);
+      res.status(401);
+      throw new Error("Unable to verify Google account");
+    }
 
     if (!payload?.email) {
       res.status(401);
       throw new Error("Unable to verify Google account");
+    }
+
+    if (payload.email_verified === false) {
+      // Extremely rare (Google-issued tokens are normally already verified)
+      // but if Google itself says the email isn't verified, don't trust it.
+      res.status(401);
+      throw new Error("Your Google account's email is not verified");
     }
 
     let user = await User.findOne({ email: payload.email.toLowerCase() });
@@ -104,11 +247,24 @@ export const googleLogin = async (req, res, next) => {
         email: payload.email,
         googleId: payload.sub,
         authProvider: "google",
-        currency: normalizedCurrency
+        currency: normalizedCurrency,
+        emailVerified: true // Google already proved ownership of this email
       });
-    } else if (!user.googleId) {
-      user.googleId = payload.sub;
-      await user.save();
+    } else {
+      let needsSave = false;
+      if (!user.googleId) {
+        user.googleId = payload.sub;
+        needsSave = true;
+      }
+      if (!user.emailVerified) {
+        // Signing in with Google for an email that already has a local,
+        // unverified account counts as proof of ownership — grandfather it
+        // in rather than leaving the user stuck on a "please verify" wall
+        // they have no way to clear via this login path.
+        user.emailVerified = true;
+        needsSave = true;
+      }
+      if (needsSave) await user.save();
     }
 
     respondWithSession(res, user);

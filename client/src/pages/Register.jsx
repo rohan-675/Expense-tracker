@@ -11,6 +11,7 @@ const Register = () => {
   const [form, setForm] = useState({ name: "", email: "", password: "", currency: "USD" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState(null);
 
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
@@ -32,7 +33,9 @@ const Register = () => {
     try {
       setLoading(true);
       await register(form);
-      navigate("/dashboard");
+      // Registration creates the account as unverified and sends a
+      // verification email — there's no session to navigate into yet.
+      setRegisteredEmail(form.email.trim());
     } catch (apiError) {
       setError(apiError.response?.data?.message || "Unable to create account");
     } finally {
@@ -51,6 +54,27 @@ const Register = () => {
       setLoading(false);
     }
   };
+
+  if (registeredEmail) {
+    return (
+      <section className="auth-layout">
+        <div className="auth-copy">
+          <p className="eyebrow">Almost there</p>
+          <h1>Check your inbox to activate your account.</h1>
+        </div>
+        <div className="auth-card">
+          <h2>Verify your email</h2>
+          <p>
+            We sent a verification link to <strong>{registeredEmail}</strong>. Click the link in that email to
+            activate your account — it expires in 24 hours.
+          </p>
+          <p className="form-footer">
+            Didn't get it? <Link to="/login">Go to login</Link> to resend it.
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="auth-layout">

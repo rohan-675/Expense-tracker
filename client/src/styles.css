@@ -1001,6 +1001,22 @@ textarea:focus {
   border: 1px solid #ffd0cc;
 }
 
+.link-button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.link-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .alert.success {
   background: #edf8f2;
   border: 1px solid #c7ecd8;

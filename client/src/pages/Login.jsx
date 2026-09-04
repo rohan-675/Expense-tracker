@@ -6,11 +6,13 @@ import { useAuth } from "../context/AuthContext.jsx";
 
 const Login = () => {
   const { isAuthenticated, login } = useAuth();
-  const { loginWithGoogle } = useAuth();
+  const { loginWithGoogle, resendVerification } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendState, setResendState] = useState("idle"); // idle | sending | sent
 
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
@@ -19,6 +21,8 @@ const Login = () => {
   const handleChange = (event) => {
     setForm({ ...form, [event.target.name]: event.target.value });
     setError("");
+    setNeedsVerification(false);
+    setResendState("idle");
   };
 
   const handleSubmit = async (event) => {
@@ -34,9 +38,21 @@ const Login = () => {
       await login(form);
       navigate("/dashboard");
     } catch (apiError) {
+      const status = apiError.response?.status;
       setError(apiError.response?.data?.message || "Unable to login");
+      setNeedsVerification(status === 403);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResend = async () => {
+    try {
+      setResendState("sending");
+      await resendVerification(form.email);
+      setResendState("sent");
+    } catch {
+      setResendState("idle");
     }
   };
 
@@ -61,7 +77,22 @@ const Login = () => {
 
       <form className="auth-card" onSubmit={handleSubmit}>
         <h2>Login</h2>
-        {error && <div className="alert error">{error}</div>}
+        {error && (
+          <div className="alert error">
+            {error}
+            {needsVerification && (
+              <div style={{ marginTop: "0.6rem" }}>
+                {resendState === "sent" ? (
+                  <span>Verification email sent — check your inbox.</span>
+                ) : (
+                  <button type="button" className="link-button" onClick={handleResend} disabled={resendState === "sending"}>
+                    {resendState === "sending" ? "Sending…" : "Resend verification email"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <label>
           Email

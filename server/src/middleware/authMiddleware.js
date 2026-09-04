@@ -24,6 +24,15 @@ export const protect = async (req, res, next) => {
       throw new Error("Not authorized, user not found");
     }
 
+    // Defense-in-depth: normal signup/login already prevent an unverified
+    // local account from ever obtaining a valid session cookie, but this
+    // guarantees it's enforced here too, at the one place every protected
+    // route passes through — not just at the login form.
+    if (!user.emailVerified) {
+      res.status(403);
+      throw new Error("Please verify your email before continuing.");
+    }
+
     req.user = user;
     next();
   } catch (error) {

@@ -9,6 +9,7 @@ import { validateEnv } from "./src/config/env.js";
 import { errorHandler, notFound } from "./src/middleware/errorMiddleware.js";
 import { createRateLimiter } from "./src/middleware/rateLimitMiddleware.js";
 import { isUsingEphemeralLocalStorage } from "./src/services/storageService.js";
+import { migrateExistingUsersAsVerified } from "./src/startup/migrateEmailVerification.js";
 import analyticsRoutes from "./src/routes/analyticsRoutes.js";
 import assistantRoutes from "./src/routes/assistantRoutes.js";
 import authRoutes from "./src/routes/authRoutes.js";
@@ -42,7 +43,20 @@ app.use((req, res, next) => {
 });
 
 const allowedOrigins = new Set();
-if (process.env.CLIENT_URL) allowedOrigins.add(process.env.CLIENT_URL);
+// CLIENT_URL may be a single origin or a comma-separated list — useful when
+// the frontend is reachable at more than one exact origin (e.g. a custom
+// domain plus its "www." variant, or a platform-provided domain kept as a
+// fallback). CORS matches the origin header exactly, so every real origin
+// the frontend can be loaded from must be listed here, or requests from an
+// unlisted one will fail with no visible error to the end user beyond a
+// generic network failure — this is a common cause of "it works for me but
+// not for other people" bug reports.
+if (process.env.CLIENT_URL) {
+  process.env.CLIENT_URL.split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean)
+    .forEach((origin) => allowedOrigins.add(origin));
+}
 
 if (!isProduction) {
   [
@@ -105,6 +119,15 @@ app.use(errorHandler);
 const startServer = async () => {
   validateEnv();
   await connectDB();
+  await migrateExistingUsersAsVerified();
+
+  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+    console.warn(
+      "WARNING: EMAIL_HOST/EMAIL_USER/EMAIL_PASSWORD are not fully configured. " +
+        "New registrations will be created but verification emails will NOT be sent " +
+        "(the raw token will be logged to the server console instead, for local testing only)."
+    );
+  }
 
   if (isUsingEphemeralLocalStorage()) {
     console.warn(

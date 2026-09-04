@@ -39,8 +39,21 @@ export const AuthProvider = ({ children }) => {
   };
 
   const register = async (payload) => {
+    // Registration no longer logs the user in directly — the account is
+    // created unverified and a verification email is sent. The backend
+    // response here is just a confirmation message, not a user session.
     const { data } = await api.post("/auth/register", payload);
+    return data;
+  };
+
+  const verifyEmail = async (token) => {
+    const { data } = await api.post("/auth/verify-email", { token });
     setUser(data);
+  };
+
+  const resendVerification = async (email) => {
+    const { data } = await api.post("/auth/resend-verification", { email });
+    return data;
   };
 
   const loginWithGoogle = async (credential, currency) => {
@@ -73,6 +86,8 @@ export const AuthProvider = ({ children }) => {
       loginWithGoogle,
       logout,
       register,
+      verifyEmail,
+      resendVerification,
       updateCurrency
     }),
     [user, isLoading]
