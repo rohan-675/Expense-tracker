@@ -137,6 +137,7 @@ a {
   top: -30%;
   transform: rotate(10deg);
   width: 30%;
+  clip-path: inset(0);
 }
 
 .navbar::after {
@@ -2116,7 +2117,7 @@ tbody tr:hover {
   }
 
   100% {
-    left: 120%;
+    left: 55%;
     opacity: 0;
   }
 }
