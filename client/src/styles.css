@@ -137,7 +137,6 @@ a {
   top: -30%;
   transform: rotate(10deg);
   width: 30%;
-  clip-path: inset(0);
 }
 
 .navbar::after {

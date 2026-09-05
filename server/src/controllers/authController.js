@@ -7,9 +7,20 @@ import { clearAuthCookie, setAuthCookie } from "../utils/authCookie.js";
 import { generateVerificationToken, hashToken } from "../utils/verificationToken.js";
 import { sendVerificationEmail } from "../services/emailService.js";
 
-// The token itself lives only in the httpOnly cookie, never in the JSON
-// body, so client-side JS (and therefore XSS) can't read it out of
-// localStorage. The frontend only ever sees this plain user profile.
+// The cookie is still the primary session mechanism (works transparently
+// for browsers that accept cross-site cookies, and survives page refresh).
+// The token is ALSO included in this response body as a fallback: some
+// browsers reject a cross-site Secure/SameSite=None cookie outright
+// (third-party-cookie blocking is now common even in regular, non-Incognito
+// Chrome, not just Safari/Incognito) — when that happens, the cookie never
+// gets stored and every subsequent request would otherwise fail with "not
+// authorized" immediately after a successful login. The frontend holds
+// this token ONLY in memory (never localStorage/sessionStorage) and
+// attaches it as a Bearer header, which `protect` already accepts as a
+// fallback behind the cookie check. This does not persist across a full
+// page reload if the cookie itself didn't stick — but it fixes the
+// far more common case of the current tab/session being unusable
+// immediately after logging in.
 const userResponse = (user) => ({
   id: user._id,
   name: user.name,
@@ -21,7 +32,7 @@ const userResponse = (user) => ({
 const respondWithSession = (res, user, status = 200) => {
   const token = generateToken(user._id);
   setAuthCookie(res, token);
-  res.status(status).json(userResponse(user));
+  res.status(status).json({ ...userResponse(user), token });
 };
 
 const issueVerificationEmail = async (user) => {

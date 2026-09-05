@@ -44,6 +44,13 @@ S3-compatible provider: Cloudflare R2, Backblaze B2, DigitalOcean Spaces).
 The server logs a warning on startup if it detects local storage + production
 mode, as a safety net.
 
+## Content Security Policy (client/vercel.json)
+`vercel.json`'s `headers` block is static JSON evaluated at deploy time — it **cannot** read `VITE_API_URL` or any other environment variable. The `Content-Security-Policy` header's `connect-src` directive contains a literal placeholder:
+```
+https://YOUR-BACKEND-DOMAIN.example.com
+```
+**You must manually replace this with your real backend's origin** (the same value as `VITE_API_URL`, without the `/api` path) before deploying, or the frontend will be blocked by its own CSP from calling the API. If you later display receipt images inline (rather than opening them in a new tab, which is the current behavior), also add your S3/R2 bucket's public origin to `img-src`.
+
 ## Before deploying
 1. **Never deploy a pre-built `client/dist/` folder.** It bakes in whatever `VITE_API_URL` was set at build time. Always rebuild for the target environment: set the real `VITE_API_URL` and run `npm run build` in `client` as part of your deploy pipeline (most static hosts do this automatically from a build command).
 2. Run `npm ci` and `npm start` in `server` with the production environment variables set.

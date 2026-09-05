@@ -1,14 +1,23 @@
 import React from "react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import api from "../api/axios.js";
+import api, { setAuthToken } from "../api/axios.js";
 
 const AuthContext = createContext(null);
 
+// Splits a session response into the plain user profile (React state) and
+// the token (handed straight to the in-memory axios fallback, never kept
+// in React state/localStorage/sessionStorage).
+const applySession = (data, setUser) => {
+  const { token, ...userData } = data;
+  setAuthToken(token);
+  setUser(userData);
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  // Auth now lives in an httpOnly cookie the browser controls, so on first
-  // load we don't know yet whether the visitor has a valid session — we
-  // have to ask the backend. isLoading covers that brief window so
+  // Auth lives primarily in an httpOnly cookie the browser controls, so on
+  // first load we don't know yet whether the visitor has a valid session —
+  // we have to ask the backend. isLoading covers that brief window so
   // ProtectedRoute doesn't bounce a logged-in user to /login before we
   // know for sure.
   const [isLoading, setIsLoading] = useState(true);
@@ -35,7 +44,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (credentials) => {
     const { data } = await api.post("/auth/login", credentials);
-    setUser(data);
+    applySession(data, setUser);
   };
 
   const register = async (payload) => {
@@ -48,7 +57,7 @@ export const AuthProvider = ({ children }) => {
 
   const verifyEmail = async (token) => {
     const { data } = await api.post("/auth/verify-email", { token });
-    setUser(data);
+    applySession(data, setUser);
   };
 
   const resendVerification = async (email) => {
@@ -58,7 +67,7 @@ export const AuthProvider = ({ children }) => {
 
   const loginWithGoogle = async (credential, currency) => {
     const { data } = await api.post("/auth/google", { credential, currency });
-    setUser(data);
+    applySession(data, setUser);
   };
 
   const updateCurrency = async (currency) => {
@@ -73,6 +82,7 @@ export const AuthProvider = ({ children }) => {
       // Clear local state regardless of whether the network call succeeded
       // so the user is never stuck "logged in" on the client after asking
       // to log out.
+      setAuthToken(null);
       setUser(null);
     }
   };

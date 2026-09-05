@@ -37,12 +37,18 @@ export const getTransactions = async (req, res, next) => {
   try {
     await processDueRecurringTransactions(req.user._id);
 
+    // Hard cap so a long-lived, heavily-used account can never turn this
+    // into an effectively-unbounded query — 1000 is generous enough that
+    // no realistic normal usage hits it (the history page's own filters
+    // narrow this further in practice), but it puts a real ceiling on
+    // worst-case query/response size.
     const transactions = await Transaction.find(getFilterQuery(req))
       .populate("walletId", "name type")
       .sort({
         date: -1,
         createdAt: -1
-      });
+      })
+      .limit(1000);
 
     res.json(transactions);
   } catch (error) {
